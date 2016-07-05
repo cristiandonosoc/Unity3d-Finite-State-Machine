@@ -55,7 +55,9 @@ namespace MonsterLove.StateMachine
 		private StateMapping currentState;
 		private StateMapping destinationState;
 
-		private Dictionary<object, StateMapping> stateLookup;
+        private Stack<StateMapping> stateStack;
+
+        private Dictionary<object, StateMapping> stateLookup;
 
 		private readonly string[] ignoredNames = new[] { "add", "remove", "get", "set" };
 
@@ -175,109 +177,143 @@ namespace MonsterLove.StateMachine
 
 		}
 
-		public void ChangeState(T newState)
-		{
-			ChangeState(newState, StateTransition.Safe);
-		}
-
-		public void ChangeState(T newState, StateTransition transition)
-		{
-			if (stateLookup == null)
-			{
-				throw new Exception("States have not been configured, please call initialized before trying to set state");
-			}
-
-			if (!stateLookup.ContainsKey(newState))
-			{
-				throw new Exception("No state with the name " + newState.ToString() + " can be found. Please make sure you are called the correct type the statemachine was initialized with");
-			}
-
-			var nextState = stateLookup[newState];
-
-			if (currentState == nextState) return;
-
-			//Cancel any queued changes.
-			if (queuedChange != null)
-			{
-				engine.StopCoroutine(queuedChange);
-				queuedChange = null;
-			}
-
-			switch (transition)
-			{
-				//case StateMachineTransition.Blend:
-				//Do nothing - allows the state transitions to overlap each other. This is a dumb idea, as previous state might trigger new changes. 
-				//A better way would be to start the two couroutines at the same time. IE don't wait for exit before starting start.
-				//How does this work in terms of overwrite?
-				//Is there a way to make this safe, I don't think so? 
-				//break;
-				case StateTransition.Safe:
-					if (isInTransition)
-					{
-						if (exitRoutine != null) //We are already exiting current state on our way to our previous target state
-						{
-							//Overwrite with our new target
-							destinationState = nextState;
-							return;
-						}
-
-						if (enterRoutine != null) //We are already entering our previous target state. Need to wait for that to finish and call the exit routine.
-						{
-							//Damn, I need to test this hard
-							queuedChange = WaitForPreviousTransition(nextState);
-							engine.StartCoroutine(queuedChange);
-							return;
-						}
-					}
-					break;
-				case StateTransition.Overwrite:
-					if (currentTransition != null)
-					{
-						engine.StopCoroutine(currentTransition);
-					}
-					if (exitRoutine != null)
-					{
-						engine.StopCoroutine(exitRoutine);
-					}
-					if (enterRoutine != null)
-					{
-						engine.StopCoroutine(enterRoutine);
-					}
-
-					//Note: if we are currently in an EnterRoutine and Exit is also a routine, this will be skipped in ChangeToNewStateRoutine()
-					break;
-			}
 
 
-			if ((currentState != null && currentState.hasExitRoutine) || nextState.hasEnterRoutine)
-			{
-				isInTransition = true;
-				currentTransition = ChangeToNewStateRoutine(nextState, transition);
-				engine.StartCoroutine(currentTransition);
-			}
-			else //Same frame transition, no coroutines are present
-			{
-				if (currentState != null)
-				{
-					currentState.ExitCall();
-					currentState.Finally();
-				}
 
-				lastState = currentState;
-				currentState = nextState;
-				if (currentState != null)
-				{
-					currentState.EnterCall();
-					if (Changed != null)
-					{
-						Changed((T) currentState.state);
-					}
-				}
-				isInTransition = false;
-			}
-		}
+        public void PushState(T newState)
+        {
+            PushState(newState, StateTransition.Safe);
+        }
 
-		private IEnumerator ChangeToNewStateRoutine(StateMapping newState, StateTransition transition)
+        public void PopState()
+        {
+            PopState(StateTransition.Safe);
+        }
+
+        public void PushState(T newState, StateTransition transition)
+        {
+            stateStack.Push(currentState);
+            ChangeState(newState, transition);
+        }
+
+        public void PopState(StateTransition transition)
+        {
+            if (stateStack.Count == 0)
+            {
+                throw new Exception("No states in stack, you have to push a state before you can pop it");
+            }
+            ChangeState(stateStack.Pop(), transition);
+        }
+
+
+        public void ChangeState(T newState)
+        {
+            ChangeState(newState, StateTransition.Safe);
+        }
+
+        private void ChangeState(StateMapping nextState, StateTransition transition)
+        {
+            if (stateLookup == null)
+            {
+                throw new Exception("States have not been configured, please call initialized before trying to set state");
+            }
+
+            if (currentState == nextState) return;
+
+            //Cancel any queued changes.
+            if (queuedChange != null)
+            {
+                engine.StopCoroutine(queuedChange);
+                queuedChange = null;
+            }
+
+            switch (transition)
+            {
+                //case StateMachineTransition.Blend:
+                //Do nothing - allows the state transitions to overlap each other. This is a dumb idea, as previous state might trigger new changes. 
+                //A better way would be to start the two couroutines at the same time. IE don't wait for exit before starting start.
+                //How does this work in terms of overwrite?
+                //Is there a way to make this safe, I don't think so? 
+                //break;
+                case StateTransition.Safe:
+                    if (isInTransition)
+                    {
+                        if (exitRoutine != null) //We are already exiting current state on our way to our previous target state
+                        {
+                            //Overwrite with our new target
+                            destinationState = nextState;
+                            return;
+                        }
+
+                        if (enterRoutine != null) //We are already entering our previous target state. Need to wait for that to finish and call the exit routine.
+                        {
+                            //Damn, I need to test this hard
+                            queuedChange = WaitForPreviousTransition(nextState);
+                            engine.StartCoroutine(queuedChange);
+                            return;
+                        }
+                    }
+                    break;
+                case StateTransition.Overwrite:
+                    if (currentTransition != null)
+                    {
+                        engine.StopCoroutine(currentTransition);
+                    }
+                    if (exitRoutine != null)
+                    {
+                        engine.StopCoroutine(exitRoutine);
+                    }
+                    if (enterRoutine != null)
+                    {
+                        engine.StopCoroutine(enterRoutine);
+                    }
+
+                    //Note: if we are currently in an EnterRoutine and Exit is also a routine, this will be skipped in ChangeToNewStateRoutine()
+                    break;
+            }
+
+
+            if ((currentState != null && currentState.hasExitRoutine) || nextState.hasEnterRoutine)
+            {
+                isInTransition = true;
+                currentTransition = ChangeToNewStateRoutine(nextState, transition);
+                engine.StartCoroutine(currentTransition);
+            }
+            else //Same frame transition, no coroutines are present
+            {
+                if (currentState != null)
+                {
+                    currentState.ExitCall();
+                    currentState.Finally();
+                }
+
+                lastState = currentState;
+                currentState = nextState;
+                if (currentState != null)
+                {
+                    currentState.EnterCall();
+                    if (Changed != null)
+                    {
+                        Changed((T)currentState.state);
+                    }
+                }
+                isInTransition = false;
+            }
+        }
+
+        public void ChangeState(T newState, StateTransition transition)
+        {
+            if (!stateLookup.ContainsKey(newState))
+            {
+                throw new Exception("No state with the name " + newState.ToString() + " can be found. Please make sure you are called the correct type the statemachine was initialized with");
+            }
+
+            var nextState = stateLookup[newState];
+
+            ChangeState(nextState, transition);
+        }
+
+        private IEnumerator ChangeToNewStateRoutine(StateMapping newState, StateTransition transition)
 		{
 			destinationState = newState; //Chache this so that we can overwrite it and hijack a transition
 
